@@ -1,20 +1,23 @@
 import express from 'express';
-import { addProduct, fetchProduct, fetchProductsChunk } from '../controllers/productControllers';
-import { auth } from '../middlewares/authentication';
-import { fetchCategoriesChunk } from '../controllers/categoryControllers';
+import { addProduct, deleteProduct, editProduct, fetchFeaturedProducts, fetchFilterProducts, fetchProduct, fetchProductsChunk, fetchSearchedProducts } from '../controllers/productControllers';
+import { authSeller } from '../middlewares/authentication';
 const productRoute = express.Router();
 
-productRoute.route('/')
-.all((req,res,next)=>{
-  console.log("product route")
-  next();
-  })
-  .post(auth,addProduct)
-  .get(auth,fetchProduct)
+productRoute.route('/filteredProducts')
+  .get(fetchFilterProducts)
+productRoute.route('/featuredProducts')
+  .get(fetchFeaturedProducts)
+productRoute.route('/search')
+  .get(fetchSearchedProducts)
 productRoute.route('/chunk')
-  .all((req,res,next)=>{
-    console.log("product route")
-    next();
-    })
-    .get(auth,fetchProductsChunk)
+  .get(fetchProductsChunk)
+productRoute.route('/seller/chunk')
+  .get(authSeller,fetchProductsChunk)
+productRoute.route('/')
+  .post(authSeller,addProduct)
+productRoute.route('/:productId')
+  .get(fetchProduct)
+  .patch(authSeller,editProduct)
+  .delete(authSeller,deleteProduct)
+  
 export default productRoute

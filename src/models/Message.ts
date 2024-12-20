@@ -1,17 +1,19 @@
-import mongoose, {Schema,Document,models,model} from "mongoose";
-import validator from "validator"
+import {Schema,Document,models,model} from "mongoose";
 export interface IMessage extends Document  {
-  chat_id:Object
-  buyer_id: Object
-  seller_id: Object
+  chatId: Schema.Types.ObjectId
+  senderId: Schema.Types.ObjectId
+  receiverId: Schema.Types.ObjectId
   message:string
-  is_read: boolean
+  isDelivered :boolean
+  isRead: boolean
 }
 const MessageSchema = new Schema<IMessage>({
-  chat_id:{type:Schema.Types.ObjectId,ref:"Chat",required:true},
-  buyer_id:{type:Schema.Types.ObjectId,ref:"Buyer",required:true},
-  seller_id:{type:Schema.Types.ObjectId,ref:"Seller",required:true},
-  message:{type:String,trim:true,minlength:1,maxlength:100,required:true},
+  chatId:{type:Schema.Types.ObjectId,ref:"Chat",required:true},
+  senderId:{type:Schema.Types.ObjectId,required:true},
+  receiverId:{type:Schema.Types.ObjectId,required:true},
+  message:{type:String,trim:true,required:true},
+  isDelivered:{type:Schema.Types.Boolean,default:false},
+  isRead:{type:Schema.Types.Boolean,default:false}
 },{
    timestamps: true
 })

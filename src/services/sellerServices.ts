@@ -1,82 +1,121 @@
 import bcrypt from 'bcrypt'
-import jwt from 'jsonwebtoken'
-import { genRefreshToken, genToken } from "../middlewares/authentication"
-import Seller from "../models/Seller"
-import Business from '../models/Business'
+import { genRefreshToken, genAccessToken } from "../middlewares/authentication"
+import Seller, { ISeller } from "../models/Seller"
 import mongoose from 'mongoose'
+import formidable from 'formidable'
+import Product from '../models/Product'
+import { NextFunction } from 'express-serve-static-core'
+import { ApiError } from '../utils/ApiErrors'
+import { putImageIntoS3Bucket } from '../utils/helpers'
+import Order from '../models/Order'
 interface SignupParams {
     name: string
     businessName: string
     email:string
     password:string
 }
-export const sellerSignupDB = async ({name,businessName,email,password}:SignupParams) =>{
+export const sellerSignupDB = async ({name,businessName,email,password}:SignupParams,next:NextFunction) =>{
   const session = await mongoose.startSession();
   session.startTransaction();
-  try {
-    const seller = await Seller.findOne({email}).select("+password")
-    if(seller){
-      await session.abortTransaction();
-      session.endSession();
-      return { statusCode : 403, error : "your already signed up" }
-    }
-    const business = await Business.findOne({businessName})
-    if(business){
-      await session.abortTransaction();
-      return { statusCode : 403, error : "business name already exist" }
-    }
-    const newBusiness = await Business.create([{businessName}],{session})
-    const hashedPassword = await bcrypt.hash(password,10)
-    const newSeller = await Seller.create([{name,businessName,email,password:hashedPassword,businessInformation:newBusiness[0]._id}],{session})
-    const accessToken = await genToken({id:newSeller[0]._id,roles:newSeller[0].roles,time:"1m"})
-    const refreshToken = await genToken({id:newSeller[0]._id,roles:newSeller[0].roles,time:"30d"})
-    newSeller[0].refreshToken = refreshToken
-    await newSeller[0].save({session})
-    await session.commitTransaction()
-    session.endSession()
-    const data = {
-      user:{
-        name:newSeller[0].name,
-        avatar:newSeller[0].avatar,
-        roles:newSeller[0].roles
-      },
-      accessToken
-    }
-    return { statusCode : 200, data , refreshToken }
-  } catch (error) {
-    console.error(error)
+
+  const seller = await Seller.findOne({email}).select("+password")
+  if(seller){
     await session.abortTransaction();
     session.endSession();
-    return { statusCode : 500 , error : "something went wrong" }
+    return next( new ApiError("your already signed up",400))
   }
+
+  const hashedPassword = await bcrypt.hash(password,10)
+  const newSeller = await Seller.create([
+    {name,email,password:hashedPassword,businessName}],
+    {session})
+  const accessToken = await genAccessToken({id:newSeller[0]._id,email,time:"1m"})
+  const refreshToken = await genRefreshToken({id:newSeller[0]._id,email,time:"30d"})
+  newSeller[0].refreshToken = refreshToken
+  await newSeller[0].save({session})
+  await session.commitTransaction()
+  session.endSession()
+  const user = {
+    userId:newSeller[0]._id,
+    name:newSeller[0].name,
+    avatar:newSeller[0].avatar,
+    roles:newSeller[0].roles,
+    businessName,
+    accessToken
+  }
+  return { statusCode : 200, user , refreshToken }
 }
 interface LoginParams {
   email:string
   password:string
 }
-export const sellerLoginDB = async ({email, password}:LoginParams)=>{
-  try {
-    const seller = await Seller.findOne({email}).select("+password")
-    if(!seller)
-      return { statusCode : 404, error : "sign up first" }
-    const isValidPassword = await bcrypt.compare(password,seller.password)
-    if(!isValidPassword)
-      return { statusCode : 403, error : "invalid credentials"}
-    const token = await genToken({id:seller._id,roles:seller.roles,time:"1m"})
-    const refreshToken = await genRefreshToken({id:seller._id,roles:seller.roles,time:"30d"})
-    seller.refreshToken = refreshToken
-    await seller.save()
-    const data = {
-      user:{
-        name:seller.name,
-        avatar:seller.avatar,
-        roles:seller.roles
-      },
-      token
-    }
-    return { statusCode : 200, data , refreshToken }
-  } catch (error) {
-    console.error(error)
-    return { statusCode : 500 , error : "something went wrong" }
+export const sellerLoginDB = async ({email, password}:LoginParams,next:NextFunction)=>{
+  const seller = await Seller.findOne({email}).select("+password") ; 
+  if(!seller)
+    return next( new ApiError("sign up first",400))
+  const isValidPassword = await bcrypt.compare(password,seller.password)
+  if(!isValidPassword)
+    return next( new ApiError("invalid credentials",400))
+  const accessToken = await genAccessToken({id:seller._id,email,time:"1m"})
+  const refreshToken = await genRefreshToken({id:seller._id,email,time:"30d"})
+  seller.refreshToken = refreshToken
+  await seller.save()
+  const user = {
+    userId: seller._id,
+    name:seller.name,
+    avatar:seller.avatar,
+    roles:seller.roles,
+    accessToken,
+    businessName:seller.businessName,
+    locations:seller.businessId.locations
   }
+  return { statusCode : 200, user , refreshToken }
+}
+interface FetchSellerProfileDB {
+  businessId:string
+}
+// export const fetchSellerProfileDB = async ({businessId}:FetchSellerProfileDB)=>{
+//     const businessInformation = await Business.findById(businessId)
+//     return { statusCode : 200, businessInformation}
+// }
+interface SetGeneralInfoDB {
+  seller: ISeller
+  avatar:formidable.File
+}
+// export const setGeneralInfoDB = async ({seller,avatar}:SetGeneralInfoDB,next:NextFunction)=>{
+//   const [,imageUrl] = await putImageIntoS3Bucket(avatar.filepath,"images",seller.businessName)
+//   if(!imageUrl) 
+//     return next( new ApiError("could`t upload the image",400))
+//   seller.avatar = imageUrl
+//   await seller.save();
+//   return { statusCode : 200 }
+// }
+interface SetBusinessInfoDB {
+  business_id: string
+  state:string
+  district:string
+  subDistrict:string
+}
+// export const setBusinessInfoDB = async ({business_id,state,district,subDistrict}:SetBusinessInfoDB)=>{
+//   await Business.findByIdAndUpdate({_id:business_id},{state,district,subDistrict});
+//   return { statusCode : 200 }
+// }
+interface FetchSellersChunkDB {
+  parsePerPage : number
+  safeSearchValue : string
+  parseCurPage : number
+}
+
+interface fetchSellerDashboardDataDB {
+  sellerId: string
+}
+export const fetchSellerDashboardDataDB = async ({sellerId}:fetchSellerDashboardDataDB) =>{
+  const noOfOrders = await Order.find({sellerId}).countDocuments();
+  const noOfPendingOrders = await Order.find({sellerId,status:"pending"}).countDocuments();
+  const noOfProducts = await Product.find({sellerId}).countDocuments();
+  return { statusCode:200, statistics: {
+    noOfOrders,
+    noOfPendingOrders,
+    noOfProducts
+  }}
 }

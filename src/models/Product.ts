@@ -1,49 +1,51 @@
 import mongoose, { Schema, Document, models, model, ObjectId } from "mongoose";
-import Category from "./Category";
+import { IMedia, mediaSchema } from ".";
 
 export interface IProduct extends Document {
+  _id:ObjectId
   name: string;
-  category: string;
-  seller_id: Object
+  category: string
+  sellerId: ObjectId
   shopName: string
-  ancestors: Object[]
+  root: string[]
   description: string;
   brand: string
   slug: string
-  media: string[];
+  media: IMedia[];
   price: number;
   stock: number;
   rating: number;
+  discount: number;
+  outOfStock: boolean
 }
 
-export const productSchema = new Schema<IProduct>({
+const productSchema = new Schema<IProduct>({
   name: { type: String, required: true },
   category: { type: String, required: true },
-  seller_id: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", required: true },
-  ancestors: [{ type: mongoose.Schema.Types.ObjectId, ref: "Category" }],
+  sellerId: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", required: true },
+  root: [{ type: String , required: true }],
   shopName: { type: String, required: true },
   description: { type: String, required: true },
   brand: { type: String, required: true },
   slug: { type: String, required: true },
-  media: { type: [String], required: true },
+  media: { type: [mediaSchema], required: true },
+  discount: { type: Number , default:0},
   price: { type: Number, required: true },
   stock: { type: Number, required: true },
   rating: { type: Number, default: 0 },
+  outOfStock: { type: Boolean, default: false }
 }, {
   timestamps: true
 })
+
 productSchema.index({
-  name: "text",
-  category: "text",
-  brand: "text",
-  description: "text",
-}, {
-  weights: {
-    name: 5,
-    Category: 4,
-    brand: 3,
-    description: 2,
-  }
+  name:1
 })
+
+productSchema.pre("save", function (next) {
+  this.outOfStock = this.stock === 0;
+  next();
+})
+
 const Product = models.Product || model<IProduct>("Product", productSchema)
 export default Product

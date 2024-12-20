@@ -1,85 +1,109 @@
 import jwt from "jsonwebtoken";
-import { Request , Response } from "express"
+import { Request , Response ,NextFunction } from "express"
 import Seller from "../models/Seller";
-import { genToken } from "./authentication";
+import { genAccessToken } from "./authentication";
 import Admin from "../models/Admin";
-export const refreshSeller = async (req:Request,res:Response) =>{
-  try {
-    const refreshToken = req.cookies.refreshToken
-    console.log(req.cookies.refreshToken)
-    if(!refreshToken)
-      return res.status(401).json({error:"token is required"})
-    jwt.verify(refreshToken,process?.env?.REFRESH_TOKEN_SECRET!,
-      async (err:any,payload:any)=> {
-        if(err){
-          //console.log(err)
-          return res.status(403).json({error:"Invalid refresh token"})
-        } 
-        if(!payload){
-          //console.log(payload)
-          return res.status(403).json({error:"payload is required"})
-        }
-        const { roles } = payload as { roles : number[]}
-        console.log(payload)
-        const admin = await Seller.findOne({refreshToken})
-        if(!admin) 
-          return res.status(404).json({error:"admin not found"}) 
-        console.log(admin)
-        const isAllowed = admin.roles.includes(roles[0])
-        if(!isAllowed)
-          return res.status(403).json({error:"Invalid payload"})
-        const token = await genToken({id:admin._id,roles:admin.roles,time:"1m"})
-        const credentials = {
-          user:{
-            name:admin.name,
-            avatar:admin.avatar,
-            roles:admin.roles
-          },
-          token
-        }
-        return res.status(200).json({credentials,message:"welcome back"})
-    })
-  } catch (e:any) {
-    return { statusCode : 500 , error : " something went wrong :\n"+e.message}
-  }
-}
-export const refresh = async (req:Request,res:Response) =>{
-  try {
-    const refreshToken = req.cookies.refreshToken
-    console.log(req.cookies.refreshToken)
-    if(!refreshToken)
-      return res.status(401).json({error:"token is required"})
-    jwt.verify(refreshToken,process?.env?.REFRESH_TOKEN_SECRET!,
-      async (err:any,payload:any)=> {
-        if(err){
-          //console.log(err)
-          return res.status(403).json({error:"Invalid refresh token"})
-        } 
-        if(!payload){
-          //console.log(payload)
-          return res.status(403).json({error:"payload is required"})
-        }
-        const { roles } = payload as { roles : number[]}
-        let refreshedUser;
-        if(roles.includes(1999))
-          refreshedUser = await Admin.findOne({refreshToken})
-        if(roles.includes(2000))
-          refreshedUser = await Seller.findOne({refreshToken})
-        if(!refreshedUser) 
-          return res.status(404).json({error:"admin not found"}) 
-        console.log(refreshedUser)
-        const token = await genToken({id:refreshedUser._id,roles:refreshedUser.roles,time:"1m"})
-        const credentials = {
-          user:{
-            name:refreshedUser.name,
-            avatar:refreshedUser.avatar,
-            roles:refreshedUser.roles
-          },
-          token
-        }
-        return res.status(200).json({credentials,message:"welcome back"})
-    })
-  } catch (e:any) {
-    return { statusCode : 500 , error : " something went wrong :\n"+e.message}
-  }
-}
+import Client, { IClient } from "../models/Client";
+import { CatchAsyncError } from "./errorsHandler";
+import { ApiError } from "../utils/ApiErrors";
+
+
+export const refreshAdmin = CatchAsyncError( 
+async (req:Request,res:Response,next:NextFunction) =>{
+  console.log("--> refresh admin request")
+  const refreshToken = req.cookies.adminToken
+  if(!refreshToken)
+    return next( new ApiError (`refresh token is required`,400))
+  jwt.verify(refreshToken,process?.env?.REFRESH_TOKEN_SECRET!,
+    async (error:any,payload:any)=> {
+      if(error)
+        return next( new ApiError (`invalid refresh token`,400))
+      if(!payload)
+        return next( new ApiError (`payLoad is required`,400))
+      const {id,roles} = payload as { id:string , roles : number[]};console.log("client id >>",id)
+      let refreshedAdmin = await Admin.findById(id); console.log("client >>",refreshedAdmin);
+      if(!refreshedAdmin) 
+        return next( new ApiError (`unauthorized access is required`,403)) 
+      const accessToken = await genAccessToken({id:refreshedAdmin._id,email:refreshedAdmin.email,time:"1m"})
+      const user = {
+        userId:refreshedAdmin._id,
+        name:refreshedAdmin.name,
+        avatar:refreshedAdmin.avatar,
+        roles:refreshedAdmin.roles,
+        accessToken
+      }
+      console.log("<-- refresh admin response")
+      return res.status(200).json({user,message:"welcome back"})
+  })
+})
+
+export const refreshSeller = CatchAsyncError( 
+async (req:Request,res:Response,next:NextFunction) =>{
+  console.log("--> refresh seller request")
+  const refreshToken = req.cookies.sellerToken; 
+  if(!refreshToken)
+    return next( new ApiError (`refresh token is required`,400))
+  jwt.verify(refreshToken,process?.env?.REFRESH_TOKEN_SECRET!,
+    async (error:any,payload:any)=> {
+      if(error)
+        return next( new ApiError (`invalid refresh token`,400))
+      if(!payload)
+        return next( new ApiError (`payLoad is required`,400))
+      const _id = payload.id as string 
+      let refreshedSeller = await Seller.findById({_id,refreshToken})
+      if(!refreshedSeller) 
+        return next( new ApiError (`unauthorized access is required`,403)) 
+      const accessToken = await genAccessToken({id:refreshedSeller._id,email:refreshedSeller.email,time:"1m"})
+      const user = {
+        userId:refreshedSeller._id,
+        name:refreshedSeller.name,
+        businessName:refreshedSeller.businessName,
+        avatar:refreshedSeller.avatar,
+        roles:refreshedSeller.roles,
+        locations:refreshedSeller.businessId.locations,
+        accessToken
+      } 
+      console.log("<-- refresh seller response")
+      return res.status(200).json({user,message:"welcome back"})
+  })
+})
+
+
+export const refreshClient =  CatchAsyncError ( 
+async (req:Request,res:Response,next:NextFunction) => { 
+  console.log("--> refresh client request")    
+  const refreshToken = req.cookies.clientToken; 
+  if(!refreshToken)
+    return next( new ApiError (`refresh token is required`,400))
+  jwt.verify(refreshToken,process?.env?.REFRESH_TOKEN_SECRET!,
+    async (err:any,payload:any)=> {
+      if(err)
+        return next( new ApiError (`invalid refresh token`,400))
+      if(!payload)
+        return next( new ApiError (`payLoad is required`,400))
+      const {id,roles} = payload as { id:string , roles : number[]}
+      let refreshedClient:IClient | null = await Client.findById(id)
+      if(!refreshedClient) 
+        return next( new ApiError (`unauthorized access is required`,403)) 
+      let stringifiedId = refreshedClient._id as string
+      const accessToken = await genAccessToken({id:stringifiedId,email:refreshedClient.email,time:"1m"})
+      const user = {
+        userId:refreshedClient._id,
+        name:refreshedClient.name,
+        roles:refreshedClient.roles,
+        addresses:refreshedClient.addresses,
+        accessToken
+      } 
+      console.log("<-- refresh client response")    
+      return res.status(200).json({user,message:"welcome back"})
+  })
+})
+
+
+
+
+
+
+
+
+

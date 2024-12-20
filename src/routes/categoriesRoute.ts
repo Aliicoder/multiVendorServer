@@ -1,17 +1,25 @@
 import express from 'express';
-import { addCategory, fetchCategoriesChunk ,fetchCategoriesNames } from '../controllers/categoryControllers';
+import { addCategory, deleteCategory, fetchCategories, fetchCategoriesChunk ,fetchCategoriesNames, fetchSellerCategories } from '../controllers/categoryControllers';
+import { authSeller } from '../middlewares/authentication';
 const categoryRoute = express.Router();
-categoryRoute.route('/')
-.all((req,res,next)=>{
-  console.log("category route")
-  next();
-  })
-  .post(addCategory)
-  .get(fetchCategoriesNames)
+
+
 categoryRoute.route('/chunk')
-.all((req,res,next)=>{
-  console.log("category route")
-  next();
-  })
   .get(fetchCategoriesChunk)
+
+categoryRoute.route('seller/chunk')
+  .get(authSeller,fetchCategoriesChunk)
+
+categoryRoute.route('/fetchCategories')
+  .get(fetchCategories)
+
+categoryRoute.route('/sellerCategories')
+  .get(authSeller,fetchSellerCategories)
+categoryRoute.route('/seller')
+  .post(authSeller,addCategory)
+  .get(authSeller,fetchCategoriesNames)
+  .delete(authSeller,deleteCategory)
+
+
+
 export default categoryRoute

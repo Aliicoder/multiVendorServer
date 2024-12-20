@@ -1,163 +1,229 @@
-import { ObjectId } from "mongoose";
-import Cart, { ICart ,IUnit } from "../models/Cart"
-import Product, { IProduct } from "../models/Product";
-import { calcAmount, calcAmountAndNumOfProducts } from "../utils/cartUtils";
-import Order, { IOrder, IOrderItem } from "../models/Order";
-export interface cartParams {
-  userId : ObjectId
-}
-export const getUserActiveCartDB = async ({userId}:cartParams) =>{
-    const activeCart = await Cart.findOne({userId,status:"active"})
-    if(!activeCart){
-      const newCart = await Cart.create({userId,status:"active"})
-      if(!newCart)
-        return { statusCode : 403 , data : "can`t create a new cart"}
-      return { statusCode : 201 , data : newCart}
-    }
-    return { statusCode : 200 , data : activeCart }
+import Cart, { ICart }  from "../models/Cart"
+import Product, { IProduct }  from "../models/Product";
+import { ICashOnDeliveryPayment } from "../controllers/cartControllers";
+import mongoose from "mongoose";
+import Order, { IOrder } from "../models/Order";
+import e, { NextFunction } from "express";
+import { ApiError } from "../utils/ApiErrors";
+import { ICartOrder, IUnit } from "../models";
 
-}
-interface UnitParams extends cartParams {
-  newUnit:{
-    productId: string
-    quantity: number
-  }
-}
-export const addUnIntoActiveCartDB = async ({userId,newUnit}:UnitParams) =>{
-    const product:IProduct | null = await Product.findById({_id:newUnit.productId})
-    if(!product)
-      return { statusCode : 404 , data : "product not found" }
-    const { statusCode , data } = await getUserActiveCartDB({userId})
-    if(statusCode.toString().startsWith("4") || statusCode.toString().startsWith("5"))
-      return { statusCode , data : "cart not found" }
-    let cart:ICart = data
-    let existingUnit = false
-    for (let i = 0 ;i < cart.units.length ;i++){
-      if(cart.units[i].productId.toString() === newUnit.productId){
-        existingUnit = true
-        cart.units[i].price = product.price
-        cart.units[i].quantity +=  newUnit.quantity
-        cart.units[i].unitPrice = cart.units[i].quantity * product.price
-       }
-    }
-    if(!existingUnit){
-      let unit:IUnit =  {
-        productId: product._id,
-        title: product.title,
-        price: product.price,
-        quantity: newUnit.quantity,
-        unitPrice: newUnit.quantity * product.price
-      }
-      cart.units.push(unit)
-      cart = calcAmountAndNumOfProducts(cart)
-      cart.save()
-      return { statusCode : 201 , data : "new product added" }
-    }
-    cart = calcAmount(cart)
-    await cart.save()
-    return { statusCode : 200 , data : " product already in the cart" }
-  
+export const getUserPopulatedActiveCartDB = async ({clientId}:cartParams,next:NextFunction) =>{
+  let cart = await Cart.findOne({clientId,status:"active"}).populate({
+    path:"orders.units.productId",
+    model:Product
+  })
+  cart = cart ? cart : await Cart.create({clientId,status:"active"})
+  return { statusCode : 200 , cart }
 }
 
-export const deleteAllUnitsDB = async ({userId}:cartParams)=>{
-    const { statusCode , data } = await getUserActiveCartDB({userId})
-    if(statusCode.toString().startsWith("4") || statusCode.toString().startsWith("5"))
-      return { statusCode , data }
-    let cart:ICart = data
-    cart.units = []
-    cart.save()
-    return { statusCode : 200 , data : " cart deleted "}
+export const getUserActiveCartDB = async ({clientId}:cartParams,next:NextFunction) =>{
+  let cart:ICart | null = await Cart.findOne({clientId,status:"active"})
+  cart = cart ? cart : await Cart.create({clientId,status:"active"})
+  return cart
 }
-interface findOneAndDeleteParams {
-  userId : ObjectId
-  productId : string
-}
-export const deleteOneUnitFromCartDB = async ({userId,productId}:findOneAndDeleteParams)=>{
 
-    const { statusCode , data } = await getUserActiveCartDB({userId})
-    if(statusCode.toString().startsWith("4") || statusCode.toString().startsWith("5"))
-      return { statusCode , data }
-    const cart:ICart = data
-    const updatedUnits = cart.units.filter((unit:IUnit)=> unit.productId.toString() !== productId )
-    cart.units = updatedUnits
-    calcAmountAndNumOfProducts(cart)
-    cart.save()
-    return { statusCode : 200 , data : "unit deleted" }
+export const addProductToCartDB = async ({clientId,productId}:addUnIntoActiveCartDB,next:NextFunction) =>{
+  const product:IProduct | null = await Product.findOne({_id:productId,outOfStock:false}) 
+  if(product == null)
+    return next( new ApiError("no product to be added found",400))
 
-  
-}
-interface UpdateUserCartDB {
-  userId:ObjectId;
-  updatedUnit:{
-    productId:string;
-    quantity:number;
-  }
-}
-export const updateUserCartDB = async ({userId,updatedUnit}:UpdateUserCartDB)=>{
-    try {
-      const product:IProduct | null = await Product.findById({_id:updatedUnit.productId})
-      if(!product)
-        return { statusCode : 404 , data : "product not found" }
-      const { statusCode , data } = await getUserActiveCartDB({userId})
-      if(statusCode.toString().startsWith("4") || statusCode.toString().startsWith("5"))
-        return { statusCode , data }
-      let cart:ICart = data 
-      for (let i = 0 ;i < cart.units.length ;i++){
-        if(cart.units[i].productId.toString() === updatedUnit.productId){
-          cart.units[i].quantity +=  updatedUnit.quantity
-          cart.units[i].unitPrice = cart.units[i].quantity * product.price
+  let cart:ICart | null = await getUserActiveCartDB({clientId},next)
+  if(!cart)
+    return next( new ApiError("getting active cart process failed",400))
+
+  let existingOrder = false , existingUnit = false ;
+
+  cart.orders.forEach((order:ICartOrder)=>{
+    let isExistingOrder = ()=> product.sellerId.toString() === order.sellerId.toString()
+    if(isExistingOrder()){ 
+      existingOrder = true 
+      order.units.forEach((unit:IUnit)=>{
+        let isExistingUnit = () => unit.productId.toString() === productId
+        if(isExistingUnit()) { 
+          existingUnit = true 
+          if(unit.noOfProducts >= product.stock)
+            return next( new ApiError("no more stock left",400))
+          
+          increaseUnitAmountAndQuantity(unit,product.price)
+          increaseOrderAmountAndQuantity(order,product.price)
+          increaseCartAmountAndQuantity(cart,product.price)
+          return
         }
-      }
-      cart = calcAmount(cart)
-      cart.save()
-      return { statusCode : 200 , data : " cart updated "}
-    } catch (e:any) {
-      return {statusCode:500, data: "something went wrong : \n" + e.message}
-    }
-}
-interface CheckOutDBParams {
-  userId : ObjectId
-  address : string
-  defaultAddress : string
-}
-export const checkOutDB = async ({userId,address,defaultAddress}:CheckOutDBParams) =>{
-  try {
-    const {statusCode, data} = await getUserActiveCartDB({userId})
-    if(statusCode.toString().startsWith("4"))
-      return { statusCode , data }
-    let cart:ICart = data
-    let orderProducts:IOrderItem[] = [] 
-    for(let unit of cart.units) {
-      const product :IProduct | null  = await Product.findById({_id:unit.productId})
-      if(!product)
-        return { statusCode : 404 , data : ` product ${unit.productId} not found` }
-      product.stock -= unit.quantity ; 
-      orderProducts.push({
-        _id:unit.productId,
-        title:product.title,
-        description:product.description,
-        images:product.images,
-        price:product.price,
-        unitPrice:unit.unitPrice,
-        quantity:unit.quantity
       })
-      await product.save()
+
+      if(!existingUnit){
+        const unit = createNewUnit(product)
+        order.units.push(unit);
+        increaseOrderAmountAndQuantity(order,product.price)
+        increaseCartAmountAndQuantity(cart,product.price)
+        return
+      }
     }
-    if(!orderProducts || orderProducts.length <= 0)
-      return { statusCode : 403 , data : "Cart is empty" }
-    console.log(orderProducts)
-    const newOrder = await Order.create({
-      userId,
-      address: defaultAddress ?? address,
-      orderProducts ,
-      amount: cart.totalAmount
-    })
-    console.log("order")
-    cart.status = "settled"
-    await cart.save()
-    await newOrder.save()
-    return { statusCode : 201 , data : "order confirmed"}
-  } catch (e:any) {
-    return {statusCode:500, data: "something went wrong : \n" + e.message}
+  })
+  
+  if(!existingOrder){ 
+    const unit = createNewUnit(product)
+    const order = createNewOrder(product,unit)
+    cart.orders.push(order)
+    increaseCartAmountAndQuantity(cart,product.price)
   }
+
+  await cart.save(); 
+  await cart.populate({path:"orders.units.productId", model:Product}); 
+  return { statusCode: 200, cart }
+}
+
+interface deleteProductAndFetchDB  {
+  clientId: string
+  productId: string
+}
+export const deleteProductFromCartDB = async ({clientId,productId}:deleteProductAndFetchDB,next:NextFunction) =>{
+  const product: IProduct | null  = await Product.findById({_id:productId})
+  if(product == null)
+    return next( new ApiError("no product to be added found",400))
+  
+  let cart:ICart | null = await getUserActiveCartDB({clientId},next)
+  if(!cart)
+    return next( new ApiError("getting active cart process failed",400))
+
+  cart.orders.forEach((order:ICartOrder) => {
+    let isExistingOrder = () => product.sellerId.toString() === order.sellerId.toString()
+    if(isExistingOrder()){ 
+      order.units.forEach((unit:IUnit)=> {
+        let isExistingUnit = () => unit.productId.toString() === productId
+        if(isExistingUnit()){
+
+          let decreaseWholeAmount = () => {
+            unit.noOfProducts --
+            order.noOfProducts --
+            cart.totalNoOfProducts --
+          }
+          decreaseWholeAmount()
+          let noUnit = () => unit.noOfProducts <= 0 
+          if(noUnit()){
+            let noOrder = () => order.noOfProducts <= 0 
+            if(noOrder()) { 
+              const filteredOrders = cart.orders.filter((order:ICartOrder) => 
+                order.sellerId.toString() != product.sellerId.toString())
+              cart.orders = filteredOrders
+              cart.totalAmount -= product.price
+              return
+            }
+            const filterUnits = order.units.filter((unit:IUnit) => unit.productId.toString() != productId)
+            order.units = filterUnits
+            order.amount -= product.price
+            cart.totalAmount -= product.price
+            return
+          }
+          
+          unit.price -= product.price
+          order.amount -= product.price
+          cart.totalAmount -= product.price
+        }
+      })
+    }
+  })
+  await cart.save()
+  await cart.populate({path:"orders.units.productId", model:Product}); 
+  return { statusCode : 200 , cart}
+}
+
+interface ICashOnDeliveryPaymentDB extends ICashOnDeliveryPayment{
+  clientId:string;
+}
+export const cashOnDeliveryPaymentDB = async ({clientId,address}:ICashOnDeliveryPaymentDB,next:NextFunction) =>{
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try{
+    const activeCart:ICart = await Cart.findOne({clientId,status:"active"}).populate({
+      path:"orders.units.productId",
+      model:Product
+    }); 
+    if(!activeCart){
+      session.abortTransaction();
+      return next( new ApiError("can`t place the order",400))
+    }
+    activeCart.status = "settled"
+    for( let order of activeCart.orders ) {
+      for( let unit of order.units ) {
+        const product:IProduct | null = await Product.findById(unit.productId) 
+        if(!product)
+          return next( new ApiError(`${unit.productId} product not found`,400))
+        if(product.stock < unit.noOfProducts)
+          return next( new ApiError(`${product.name} is out of stock`,400))
+        const stock = product.stock - unit.noOfProducts
+        product.stock = stock
+        console.log("product >>",product)
+        await product.save({session})
+      }
+      console.log("address >>",address)
+      let ORDER = {
+        sellerId:order.sellerId,
+        amount:order.amount,
+        units:order.units,
+        noOfProducts:order.noOfProducts,
+        shopName:order.shopName,
+        clientId,
+        address
+      }
+      console.log("order >>",ORDER)
+      const placedOrder = new Order(ORDER);
+      await placedOrder.save({ session });
+    }
+    await session.commitTransaction()
+    await activeCart.save() 
+    session.endSession()
+    return { statusCode : 200  }
+  }catch(error:any){ 
+    await session.abortTransaction()
+    session.endSession()
+    return next(new ApiError(`transaction failed : ${error.message}`, 500));
+  }
+ }
+
+
+
+ export interface cartParams {
+  clientId : string
+}
+interface addUnIntoActiveCartDB  {
+  clientId: string
+  productId: string
+}
+
+interface addUnIntoActiveCartDB  {
+clientId: string
+productId: string
+}
+
+
+const increaseUnitAmountAndQuantity = (unit:IUnit,productPrice:number) =>{
+  unit.noOfProducts ++
+  unit.price += productPrice
+}
+const increaseOrderAmountAndQuantity = (order:ICartOrder,productPrice:number) =>{
+  order.noOfProducts ++
+  order.amount += productPrice
+}
+const increaseCartAmountAndQuantity = (cart:ICart,productPrice:number) =>{
+  cart.totalNoOfProducts ++
+  cart.totalAmount += productPrice
+}
+const createNewUnit = (product:IProduct) =>{
+  let UNIT:IUnit =  {
+    productId: product._id,
+    noOfProducts: 1 ,
+    price: product.price
+  }
+  return UNIT
+}
+const createNewOrder = (product:IProduct,unit:IUnit) =>{
+  let ORDER:ICartOrder = {
+    sellerId:product.sellerId,
+    units:[unit],
+    amount:unit.price,
+    noOfProducts:1,
+    shopName:product.shopName
+  }
+  return ORDER
 }

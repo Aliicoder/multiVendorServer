@@ -1,31 +1,27 @@
-import { Schema,Document,ObjectId, models, model } from 'mongoose'
-export interface IUnit {
-  productId : ObjectId
-  title: string
-  price: number
-  unitPrice : number
-  quantity : number
-}
+import { Schema,Document , models, model, ObjectId } from 'mongoose'
+import { ICartOrder, cartOrderSchema } from '.'
+
 export interface ICart extends Document{
-  userId : ObjectId
-  units : IUnit[]
-  numberOfProducts : number
+  clientId : ObjectId
+  orders : ICartOrder[]
+  totalNoOfProducts : number
   totalAmount : number
   status : "active" | "settled"
 }
-const unitSchema = new Schema<IUnit>({
-  productId : {type: Schema.Types.ObjectId ,ref:"Product"},
-  title : {type: String,required: true},
-  price : { type:Number,required: true},
-  unitPrice : {type: Number,required: true},
-  quantity : {type: Number,required: true ,default: 1 },
-})
+
 const cartSchema = new Schema<ICart>({
-  userId : { type: Schema.Types.ObjectId , ref : "User",required: true},
-  units : { type: [unitSchema] },
-  numberOfProducts : { type: Number, default: 0},
+  clientId : { type: Schema.Types.ObjectId , ref : "Client",required: true},
+  orders : { type: [cartOrderSchema] },
+  totalNoOfProducts : { type: Number, default: 0},
   totalAmount : { type: Number, default : 0 },
   status : { type: String , enum : ["active","settled"], default: "active"},
+},{
+  timestamps:true,
+})
+cartSchema.index({
+  status: 1
 })
 const Cart = models.Cart || model<ICart>('Cart',cartSchema)
 export default Cart
+
+
